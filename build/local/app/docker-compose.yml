@@ -1,0 +1,11 @@
+version: '3.1'
+services:
+  postgres:
+    image: postgres:17.0
+    container_name: test_xui
+    environment:
+      POSTGRES_DB: test_xui
+      POSTGRES_USER: test_xui
+      POSTGRES_PASSWORD: test_xui
+    ports:
+      - "8093:5432"

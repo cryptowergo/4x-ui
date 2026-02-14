@@ -6,10 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/fs"
 	"log"
 	"os"
-	"path"
 	"slices"
 
 	"github.com/mhsanaei/3x-ui/v2/config"
@@ -39,8 +37,8 @@ func initModels() error {
 		&xray.ClientTraffic{},
 		&model.HistoryOfSeeders{},
 	}
-	for _, model := range models {
-		if err := db.AutoMigrate(model); err != nil {
+	for _, dbModel := range models {
+		if err := db.AutoMigrate(dbModel); err != nil {
 			log.Printf("Error auto migrating model: %v", err)
 			return err
 		}
@@ -121,41 +119,18 @@ func isTableEmpty(tableName string) (bool, error) {
 
 // InitDB sets up the database connection, migrates models, and runs seeders.
 func InitDB(dbPath string) error {
-	dir := path.Dir(dbPath)
-	err := os.MkdirAll(dir, fs.ModePerm)
+	// Try to get configuration from environment file first
+	dbConfig, err := getDatabaseConfig()
 	if err != nil {
 		return err
 	}
 
-	var gormLogger logger.Interface
-
-	if config.IsDebug() {
-		gormLogger = logger.Default
-	} else {
-		gormLogger = logger.Discard
+	// If still using SQLite and dbPath is provided, use it
+	if dbConfig.Type == config.DatabaseTypeSQLite && dbPath != "" {
+		dbConfig.SQLite.Path = dbPath
 	}
 
-	c := &gorm.Config{
-		Logger: gormLogger,
-	}
-	db, err = gorm.Open(sqlite.Open(dbPath), c)
-	if err != nil {
-		return err
-	}
-
-	if err := initModels(); err != nil {
-		return err
-	}
-
-	isUsersEmpty, err := isTableEmpty("users")
-	if err != nil {
-		return err
-	}
-
-	if err := initUser(); err != nil {
-		return err
-	}
-	return runSeeders(isUsersEmpty)
+	return InitDBWithConfig(dbConfig)
 }
 
 // CloseDB closes the database connection if it exists.
