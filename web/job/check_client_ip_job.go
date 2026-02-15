@@ -108,7 +108,7 @@ func (j *CheckClientIpJob) hasLimitIp() bool {
 		}
 
 		settings := map[string][]model.Client{}
-		json.Unmarshal([]byte(inbound.Settings), &settings)
+		json.Unmarshal(inbound.Settings, &settings)
 		clients := settings["clients"]
 
 		for _, client := range clients {
