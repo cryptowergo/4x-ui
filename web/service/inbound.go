@@ -144,11 +144,14 @@ func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, err
 func (s *InboundService) getAllEmails() ([]string, error) {
 	db := database.GetDB()
 	var emails []string
+
+	// Для PostgreSQL используем jsonb_array_elements для работы с JSON массивом
 	err := db.Raw(`
-		SELECT JSON_EXTRACT(client.value, '$.email')
+		SELECT client->>'email'
 		FROM inbounds,
-			JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
-		`).Scan(&emails).Error
+			jsonb_array_elements(inbounds.settings->'clients') AS client
+	`).Scan(&emails).Error
+
 	if err != nil {
 		return nil, err
 	}
@@ -1312,12 +1315,15 @@ func (s *InboundService) GetInboundTags() (string, error) {
 
 func (s *InboundService) MigrationRemoveOrphanedTraffics() {
 	db := database.GetDB()
+
+	// Более производительный вариант с LEFT JOIN
 	db.Exec(`
-		DELETE FROM client_traffics
-		WHERE email NOT IN (
-			SELECT JSON_EXTRACT(client.value, '$.email')
+		DELETE FROM client_traffics ct
+		WHERE NOT EXISTS (
+			SELECT 1
 			FROM inbounds,
-				JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
+				jsonb_array_elements(inbounds.settings->'clients') AS client
+			WHERE client->>'email' = ct.email
 		)
 	`)
 }
@@ -2059,18 +2065,20 @@ func (s *InboundService) GetClientTrafficByID(id string) ([]xray.ClientTraffic, 
 	db := database.GetDB()
 	var traffics []xray.ClientTraffic
 
+	// Для PostgreSQL используем jsonb_array_elements для работы с JSON массивом
 	err := db.Model(xray.ClientTraffic{}).Where(`email IN(
-		SELECT JSON_EXTRACT(client.value, '$.email') as email
+		SELECT client->>'email' as email
 		FROM inbounds,
-	  	JSON_EACH(JSON_EXTRACT(inbounds.settings, '$.clients')) AS client
+			jsonb_array_elements(inbounds.settings->'clients') AS client
 		WHERE
-	  	JSON_EXTRACT(client.value, '$.id') in (?)
+			client->>'id' IN (?)
 		)`, id).Find(&traffics).Error
 
 	if err != nil {
 		logger.Debug(err)
 		return nil, err
 	}
+
 	// Reconcile enable flag with client settings per email to avoid stale DB value
 	for i := range traffics {
 		if ct, client, e := s.GetClientByEmail(traffics[i].Email); e == nil && ct != nil && client != nil {
@@ -2318,11 +2326,14 @@ func (s *InboundService) MigrationRequirements() {
 		Port           int
 		StreamSettings []byte
 	}
-	err = tx.Raw(`select id, port, stream_settings
-	from inbounds
-	WHERE protocol in ('vmess','vless','trojan')
-	  AND json_extract(stream_settings, '$.security') = 'tls'
-	  AND json_extract(stream_settings, '$.tlsSettings.settings.domains') IS NOT NULL`).Scan(&externalProxy).Error
+	err = tx.Raw(`
+	SELECT id, port, stream_settings
+	FROM inbounds
+	WHERE protocol IN ('vmess','vless','trojan')
+	  AND stream_settings->>'security' = 'tls'
+	  AND stream_settings->'tlsSettings'->'settings'->'domains' IS NOT NULL
+`).Scan(&externalProxy).Error
+
 	if err != nil || len(externalProxy) == 0 {
 		return
 	}
