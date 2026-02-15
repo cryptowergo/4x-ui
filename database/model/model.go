@@ -57,6 +57,14 @@ type Inbound struct {
 	Tag            string         `json:"tag" form:"tag" gorm:"unique"`
 }
 
+func (i *Inbound) SettingsString() string       { return string(i.Settings) }
+func (i *Inbound) StreamSettingsString() string { return string(i.StreamSettings) }
+func (i *Inbound) SniffingString() string       { return string(i.Sniffing) }
+
+func (i *Inbound) SetSettingsString(s string)       { i.Settings = datatypes.JSON([]byte(s)) }
+func (i *Inbound) SetStreamSettingsString(s string) { i.StreamSettings = datatypes.JSON([]byte(s)) }
+func (i *Inbound) SetSniffingString(s string)       { i.Sniffing = datatypes.JSON([]byte(s)) }
+
 // OutboundTraffics tracks traffic statistics for Xray outbound connections.
 type OutboundTraffics struct {
 	Id    int    `json:"id" form:"id" gorm:"primaryKey;autoIncrement"`

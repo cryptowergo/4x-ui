@@ -67,11 +67,11 @@ func (s *SubService) GetSubs(subId string, host string) ([]string, int64, xray.C
 			continue
 		}
 		if len(inbound.Listen) > 0 && inbound.Listen[0] == '@' {
-			listen, port, streamSettings, err := s.getFallbackMaster(inbound.Listen, inbound.StreamSettings)
+			listen, port, streamSettings, err := s.getFallbackMaster(inbound.Listen, inbound.StreamSettingsString())
 			if err == nil {
 				inbound.Listen = listen
 				inbound.Port = port
-				inbound.StreamSettings = streamSettings
+				inbound.SetStreamSettingsString(streamSettings)
 			}
 		}
 		for _, client := range clients {

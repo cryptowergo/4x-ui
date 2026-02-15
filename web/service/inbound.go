@@ -4,6 +4,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -31,7 +32,10 @@ type InboundService struct {
 func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 	db := database.GetDB()
 	var inbounds []*model.Inbound
-	err := db.Model(model.Inbound{}).Preload("ClientStats").Where("user_id = ?", userId).Find(&inbounds).Error
+	err := db.Model(model.Inbound{}).
+		Preload("ClientStats").
+		Where("user_id = ?", userId).
+		Find(&inbounds).Error
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
@@ -98,30 +102,23 @@ func (s *InboundService) GetInboundsByTrafficReset(period string) ([]*model.Inbo
 }
 
 func (s *InboundService) checkPortExist(listen string, port int, ignoreId int) (bool, error) {
-	db := database.GetDB()
-	if listen == "" || listen == "0.0.0.0" || listen == "::" || listen == "::0" {
-		db = db.Model(model.Inbound{}).Where("port = ?", port)
-	} else {
-		db = db.Model(model.Inbound{}).
-			Where("port = ?", port).
-			Where(
-				db.Model(model.Inbound{}).Where(
-					"listen = ?", listen,
-				).Or(
-					"listen = \"\"",
-				).Or(
-					"listen = \"0.0.0.0\"",
-				).Or(
-					"listen = \"::\"",
-				).Or(
-					"listen = \"::0\""))
+	db := database.GetDB().Model(&model.Inbound{})
+
+	db = db.Where("port = ?", port)
+
+	anyListen := listen == "" || listen == "0.0.0.0" || listen == "::" || listen == "::0"
+	if !anyListen {
+		// конфликт, если у существующего inbound listen совпадает с новым
+		// или существующий слушает "на всех"
+		db = db.Where("listen IN ?", []string{listen, "", "0.0.0.0", "::", "::0"})
 	}
+
 	if ignoreId > 0 {
-		db = db.Where("id != ?", ignoreId)
+		db = db.Where("id <> ?", ignoreId)
 	}
+
 	var count int64
-	err := db.Count(&count).Error
-	if err != nil {
+	if err := db.Count(&count).Error; err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -129,7 +126,7 @@ func (s *InboundService) checkPortExist(listen string, port int, ignoreId int) (
 
 func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, error) {
 	settings := map[string][]model.Client{}
-	json.Unmarshal([]byte(inbound.Settings), &settings)
+	json.Unmarshal(inbound.Settings, &settings)
 	if settings == nil {
 		return nil, fmt.Errorf("setting is null")
 	}
@@ -147,10 +144,13 @@ func (s *InboundService) getAllEmails() ([]string, error) {
 
 	// Для PostgreSQL используем jsonb_array_elements для работы с JSON массивом
 	err := db.Raw(`
-		SELECT client->>'email'
-		FROM inbounds,
-			jsonb_array_elements(inbounds.settings::jsonb->'clients') AS client
-	`).Scan(&emails).Error
+    SELECT client->>'email'
+    FROM inbounds
+    CROSS JOIN LATERAL jsonb_array_elements(
+        COALESCE(inbounds.settings->'clients', '[]'::jsonb)
+    ) AS client
+    WHERE client ? 'email'
+`).Scan(&emails).Error
 
 	if err != nil {
 		return nil, err
@@ -241,7 +241,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	// Ensure created_at and updated_at on clients in settings
 	if len(clients) > 0 {
 		var settings map[string]any
-		if err2 := json.Unmarshal([]byte(inbound.Settings), &settings); err2 == nil && settings != nil {
+		if err2 := json.Unmarshal(inbound.Settings, &settings); err2 == nil && settings != nil {
 			now := time.Now().Unix() * 1000
 			updatedClients := make([]model.Client, 0, len(clients))
 			for _, c := range clients {
@@ -253,7 +253,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 			}
 			settings["clients"] = updatedClients
 			if bs, err3 := json.MarshalIndent(settings, "", "  "); err3 == nil {
-				inbound.Settings = string(bs)
+				inbound.SetSettingsString(string(bs))
 			} else {
 				logger.Debug("Unable to marshal inbound settings with timestamps:", err3)
 			}
@@ -416,7 +416,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	// Ensure created_at and updated_at exist in inbound.Settings clients
 	{
 		var oldSettings map[string]any
-		_ = json.Unmarshal([]byte(oldInbound.Settings), &oldSettings)
+		_ = json.Unmarshal(oldInbound.Settings, &oldSettings)
 		emailToCreated := map[string]int64{}
 		emailToUpdated := map[string]int64{}
 		if oldSettings != nil {
@@ -442,7 +442,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			}
 		}
 		var newSettings map[string]any
-		if err2 := json.Unmarshal([]byte(inbound.Settings), &newSettings); err2 == nil && newSettings != nil {
+		if err2 := json.Unmarshal(inbound.Settings, &newSettings); err2 == nil && newSettings != nil {
 			now := time.Now().Unix() * 1000
 			if nSlice, ok := newSettings["clients"].([]any); ok {
 				for i := range nSlice {
@@ -466,7 +466,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 				}
 				newSettings["clients"] = nSlice
 				if bs, err3 := json.MarshalIndent(newSettings, "", "  "); err3 == nil {
-					inbound.Settings = string(bs)
+					inbound.SetSettingsString(string(bs))
 				}
 			}
 		}
@@ -568,7 +568,7 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(data.Settings), &settings)
+	err = json.Unmarshal(data.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -617,7 +617,7 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	}
 
 	var oldSettings map[string]any
-	err = json.Unmarshal([]byte(oldInbound.Settings), &oldSettings)
+	err = json.Unmarshal(oldInbound.Settings, &oldSettings)
 	if err != nil {
 		return false, err
 	}
@@ -632,7 +632,7 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		return false, err
 	}
 
-	oldInbound.Settings = string(newSettings)
+	oldInbound.SetSettingsString(string(newSettings))
 
 	db := database.GetDB()
 	tx := db.Begin()
@@ -686,7 +686,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 		return false, err
 	}
 	var settings map[string]any
-	err = json.Unmarshal([]byte(oldInbound.Settings), &settings)
+	err = json.Unmarshal(oldInbound.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -724,7 +724,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 		return false, err
 	}
 
-	oldInbound.Settings = string(newSettings)
+	oldInbound.SetSettingsString(string(newSettings))
 
 	db := database.GetDB()
 
@@ -775,7 +775,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(data.Settings), &settings)
+	err = json.Unmarshal(data.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -831,7 +831,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	}
 
 	var oldSettings map[string]any
-	err = json.Unmarshal([]byte(oldInbound.Settings), &oldSettings)
+	err = json.Unmarshal(oldInbound.Settings, &oldSettings)
 	if err != nil {
 		return false, err
 	}
@@ -863,7 +863,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 		return false, err
 	}
 
-	oldInbound.Settings = string(newSettings)
+	oldInbound.SetSettingsString(string(newSettings))
 	db := database.GetDB()
 	tx := db.Begin()
 
@@ -1084,7 +1084,7 @@ func (s *InboundService) adjustTraffics(tx *gorm.DB, dbClientTraffics []*xray.Cl
 		}
 		for inbound_index := range inbounds {
 			settings := map[string]any{}
-			json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
+			json.Unmarshal(inbounds[inbound_index].Settings, &settings)
 			clients, ok := settings["clients"].([]any)
 			if ok {
 				var newClients []any
@@ -1113,7 +1113,7 @@ func (s *InboundService) adjustTraffics(tx *gorm.DB, dbClientTraffics []*xray.Cl
 					return nil, err
 				}
 
-				inbounds[inbound_index].Settings = string(modifiedSettings)
+				inbounds[inbound_index].SetSettingsString(string(modifiedSettings))
 			}
 		}
 		err = tx.Save(inbounds).Error
@@ -1159,7 +1159,7 @@ func (s *InboundService) autoRenewClients(tx *gorm.DB) (bool, int64, error) {
 	}
 	for inbound_index := range inbounds {
 		settings := map[string]any{}
-		json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
+		json.Unmarshal(inbounds[inbound_index].Settings, &settings)
 		clients := settings["clients"].([]any)
 		for client_index := range clients {
 			c := clients[client_index].(map[string]any)
@@ -1196,7 +1196,7 @@ func (s *InboundService) autoRenewClients(tx *gorm.DB) (bool, int64, error) {
 		if err != nil {
 			return false, 0, err
 		}
-		inbounds[inbound_index].Settings = string(newSettings)
+		inbounds[inbound_index].SetSettingsString(string(newSettings))
 	}
 	err = tx.Save(inbounds).Error
 	if err != nil {
@@ -1230,7 +1230,7 @@ func (s *InboundService) disableInvalidInbounds(tx *gorm.DB) (bool, int64, error
 		var tags []string
 		err := tx.Table("inbounds").
 			Select("inbounds.tag").
-			Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+			Where("(COALESCE(up,0) + COALESCE(down,0) >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
 			Scan(&tags).Error
 		if err != nil {
 			return false, 0, err
@@ -1249,7 +1249,7 @@ func (s *InboundService) disableInvalidInbounds(tx *gorm.DB) (bool, int64, error
 	}
 
 	result := tx.Model(model.Inbound{}).
-		Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+		Where("((COALESCE(up,0) + COALESCE(down,0) >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
 		Update("enable", false)
 	err := result.Error
 	count := result.RowsAffected
@@ -1267,10 +1267,14 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 		}
 
 		err := tx.Table("inbounds").
-			Select("inbounds.tag, client_traffics.email").
+			Select("DISTINCT inbounds.tag, client_traffics.email").
 			Joins("JOIN client_traffics ON inbounds.id = client_traffics.inbound_id").
-			Where("((client_traffics.total > 0 AND client_traffics.up + client_traffics.down >= client_traffics.total) OR (client_traffics.expiry_time > 0 AND client_traffics.expiry_time <= ?)) AND client_traffics.enable = ?", now, true).
+			Where("((client_traffics.total > 0 AND COALESCE(client_traffics.up,0) + COALESCE(client_traffics.down,0) >= client_traffics.total) OR (client_traffics.expiry_time > 0 AND client_traffics.expiry_time <= ?)) AND client_traffics.enable = ?", now, true).
 			Scan(&results).Error
+		if err != nil {
+			return false, 0, err
+		}
+
 		if err != nil {
 			return false, 0, err
 		}
@@ -1294,8 +1298,11 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 		}
 		s.xrayApi.Close()
 	}
+
+	whereCT := "((total > 0 AND COALESCE(up,0) + COALESCE(down,0) >= total) OR (expiry_time > 0 AND expiry_time <= ?)) AND enable = ?"
+
 	result := tx.Model(xray.ClientTraffic{}).
-		Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+		Where(whereCT, now, true).
 		Update("enable", false)
 	err := result.Error
 	count := result.RowsAffected
@@ -1305,27 +1312,26 @@ func (s *InboundService) disableInvalidClients(tx *gorm.DB) (bool, int64, error)
 func (s *InboundService) GetInboundTags() (string, error) {
 	db := database.GetDB()
 	var inboundTags []string
-	err := db.Model(model.Inbound{}).Select("tag").Find(&inboundTags).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err := db.Model(&model.Inbound{}).Pluck("tag", &inboundTags).Error; err != nil {
 		return "", err
 	}
-	tags, _ := json.Marshal(inboundTags)
-	return string(tags), nil
+	b, _ := json.Marshal(inboundTags)
+	return string(b), nil
 }
 
 func (s *InboundService) MigrationRemoveOrphanedTraffics() {
 	db := database.GetDB()
-
-	// Более производительный вариант с LEFT JOIN
 	db.Exec(`
-		DELETE FROM client_traffics ct
-		WHERE NOT EXISTS (
-			SELECT 1
-			FROM inbounds,
-				jsonb_array_elements(inbounds.settings::jsonb->'clients') AS client
-			WHERE client->>'email' = ct.email
-		)
-	`)
+        DELETE FROM client_traffics ct
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM inbounds
+            CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(inbounds.settings->'clients', '[]'::jsonb)
+            ) AS client
+            WHERE client->>'email' = ct.email
+        )
+    `)
 }
 
 func (s *InboundService) AddClientStat(tx *gorm.DB, inboundId int, client *model.Client) error {
@@ -1344,7 +1350,7 @@ func (s *InboundService) AddClientStat(tx *gorm.DB, inboundId int, client *model
 }
 
 func (s *InboundService) UpdateClientStat(tx *gorm.DB, email string, client *model.Client) error {
-	result := tx.Model(xray.ClientTraffic{}).
+	result := tx.Model(&xray.ClientTraffic{}).
 		Where("email = ?", email).
 		Updates(map[string]any{
 			"enable":      client.Enable,
@@ -1369,19 +1375,27 @@ func (s *InboundService) DelClientIPs(tx *gorm.DB, email string) error {
 	return tx.Where("client_email = ?", email).Delete(model.InboundClientIps{}).Error
 }
 
-func (s *InboundService) GetClientInboundByTrafficID(trafficId int) (traffic *xray.ClientTraffic, inbound *model.Inbound, err error) {
+func (s *InboundService) GetClientInboundByTrafficID(trafficId int) (*xray.ClientTraffic, *model.Inbound, error) {
 	db := database.GetDB()
-	var traffics []*xray.ClientTraffic
-	err = db.Model(xray.ClientTraffic{}).Where("id = ?", trafficId).Find(&traffics).Error
+
+	var traffic xray.ClientTraffic
+	err := db.Model(&xray.ClientTraffic{}).
+		Where("id = ?", trafficId).
+		First(&traffic).Error
+
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, nil
+		}
 		logger.Warningf("Error retrieving ClientTraffic with trafficId %d: %v", trafficId, err)
 		return nil, nil, err
 	}
-	if len(traffics) > 0 {
-		inbound, err = s.GetInbound(traffics[0].InboundId)
-		return traffics[0], inbound, err
+
+	inbound, err := s.GetInbound(traffic.InboundId)
+	if err != nil {
+		return &traffic, nil, err
 	}
-	return nil, nil, nil
+	return &traffic, inbound, nil
 }
 
 func (s *InboundService) GetClientInboundByEmail(email string) (traffic *xray.ClientTraffic, inbound *model.Inbound, err error) {
@@ -1459,7 +1473,7 @@ func (s *InboundService) SetClientTelegramUserID(trafficId int, tgId int64) (boo
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(inbound.Settings), &settings)
+	err = json.Unmarshal(inbound.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -1478,7 +1492,7 @@ func (s *InboundService) SetClientTelegramUserID(trafficId int, tgId int64) (boo
 	if err != nil {
 		return false, err
 	}
-	inbound.Settings = string(modifiedSettings)
+	inbound.SetSettingsString(string(modifiedSettings))
 	needRestart, err := s.UpdateInboundClient(inbound, clientId)
 	return needRestart, err
 }
@@ -1546,7 +1560,7 @@ func (s *InboundService) ToggleClientEnableByEmail(clientEmail string) (bool, bo
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(inbound.Settings), &settings)
+	err = json.Unmarshal(inbound.Settings, &settings)
 	if err != nil {
 		return false, false, err
 	}
@@ -1565,7 +1579,7 @@ func (s *InboundService) ToggleClientEnableByEmail(clientEmail string) (bool, bo
 	if err != nil {
 		return false, false, err
 	}
-	inbound.Settings = string(modifiedSettings)
+	inbound.SetSettingsString(string(modifiedSettings))
 
 	needRestart, err := s.UpdateInboundClient(inbound, clientId)
 	if err != nil {
@@ -1626,7 +1640,7 @@ func (s *InboundService) ResetClientIpLimitByEmail(clientEmail string, count int
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(inbound.Settings), &settings)
+	err = json.Unmarshal(inbound.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -1645,7 +1659,7 @@ func (s *InboundService) ResetClientIpLimitByEmail(clientEmail string, count int
 	if err != nil {
 		return false, err
 	}
-	inbound.Settings = string(modifiedSettings)
+	inbound.SetSettingsString(string(modifiedSettings))
 	needRestart, err := s.UpdateInboundClient(inbound, clientId)
 	return needRestart, err
 }
@@ -1685,7 +1699,7 @@ func (s *InboundService) ResetClientExpiryTimeByEmail(clientEmail string, expiry
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(inbound.Settings), &settings)
+	err = json.Unmarshal(inbound.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -1704,7 +1718,7 @@ func (s *InboundService) ResetClientExpiryTimeByEmail(clientEmail string, expiry
 	if err != nil {
 		return false, err
 	}
-	inbound.Settings = string(modifiedSettings)
+	inbound.SetSettingsString(string(modifiedSettings))
 	needRestart, err := s.UpdateInboundClient(inbound, clientId)
 	return needRestart, err
 }
@@ -1747,7 +1761,7 @@ func (s *InboundService) ResetClientTrafficLimitByEmail(clientEmail string, tota
 	}
 
 	var settings map[string]any
-	err = json.Unmarshal([]byte(inbound.Settings), &settings)
+	err = json.Unmarshal(inbound.Settings, &settings)
 	if err != nil {
 		return false, err
 	}
@@ -1766,7 +1780,7 @@ func (s *InboundService) ResetClientTrafficLimitByEmail(clientEmail string, tota
 	if err != nil {
 		return false, err
 	}
-	inbound.Settings = string(modifiedSettings)
+	inbound.SetSettingsString(string(modifiedSettings))
 	needRestart, err := s.UpdateInboundClient(inbound, clientId)
 	return needRestart, err
 }
@@ -1810,7 +1824,7 @@ func (s *InboundService) ResetClientTraffic(id int, clientEmail string) (bool, e
 				cipher := ""
 				if string(inbound.Protocol) == "shadowsocks" {
 					var oldSettings map[string]any
-					err = json.Unmarshal([]byte(inbound.Settings), &oldSettings)
+					err = json.Unmarshal(inbound.Settings, &oldSettings)
 					if err != nil {
 						return false, err
 					}
@@ -1920,7 +1934,7 @@ func (s *InboundService) DelDepletedClients(id int) (err error) {
 	depletedClients := []xray.ClientTraffic{}
 	err = db.Model(xray.ClientTraffic{}).
 		Where(whereText+" and ((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?))", id, now).
-		Select("inbound_id, GROUP_CONCAT(email) as email").
+		Select("inbound_id, STRING_AGG(email, ',') as email").
 		Group("inbound_id").
 		Find(&depletedClients).Error
 	if err != nil {
@@ -1934,7 +1948,7 @@ func (s *InboundService) DelDepletedClients(id int) (err error) {
 			return err
 		}
 		var oldSettings map[string]any
-		err = json.Unmarshal([]byte(oldInbound.Settings), &oldSettings)
+		err = json.Unmarshal(oldInbound.Settings, &oldSettings)
 		if err != nil {
 			return err
 		}
@@ -1962,7 +1976,7 @@ func (s *InboundService) DelDepletedClients(id int) (err error) {
 				return err
 			}
 
-			oldInbound.Settings = string(newSettings)
+			oldInbound.SetSettingsString(string(newSettings))
 			err = tx.Save(oldInbound).Error
 			if err != nil {
 				return err
@@ -2069,7 +2083,7 @@ func (s *InboundService) GetClientTrafficByID(id string) ([]xray.ClientTraffic, 
 	err := db.Model(xray.ClientTraffic{}).Where(`email IN(
 		SELECT client->>'email' as email
 		FROM inbounds,
-			jsonb_array_elements(inbounds.settings::jsonb->'clients') AS client
+			jsonb_array_elements(COALESCE(inbounds.settings->'clients','[]'::jsonb)) AS client
 		WHERE
 			client->>'id' IN (?)
 		)`, id).Find(&traffics).Error
@@ -2096,7 +2110,7 @@ func (s *InboundService) SearchClientTraffic(query string) (traffic *xray.Client
 	traffic = &xray.ClientTraffic{}
 
 	// Search for inbound settings that contain the query
-	err = db.Model(model.Inbound{}).Where("settings LIKE ?", "%\""+query+"\"%").First(inbound).Error
+	err = db.Model(model.Inbound{}).Where("settings::text LIKE ?", "%\""+query+"\"%").First(inbound).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			logger.Warningf("Inbound settings containing query %s not found: %v", query, err)
@@ -2110,7 +2124,7 @@ func (s *InboundService) SearchClientTraffic(query string) (traffic *xray.Client
 
 	// Unmarshal settings to get clients
 	settings := map[string][]model.Client{}
-	if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+	if err := json.Unmarshal(inbound.Settings, &settings); err != nil {
 		logger.Errorf("Error unmarshalling inbound settings for inbound ID %d: %v", inbound.Id, err)
 		return nil, err
 	}
@@ -2217,30 +2231,44 @@ func (s *InboundService) MigrationRequirements() {
 	tx := db.Begin()
 	var err error
 	defer func() {
-		if err == nil {
-			tx.Commit()
-			if dbErr := db.Exec(`VACUUM "main"`).Error; dbErr != nil {
-				logger.Warningf("VACUUM failed: %v", dbErr)
-			}
-		} else {
-			tx.Rollback()
+		if r := recover(); r != nil {
+			_ = tx.Rollback()
+			panic(r)
+		}
+
+		if err != nil {
+			_ = tx.Rollback()
+			return
+		}
+
+		if commitErr := tx.Commit().Error; commitErr != nil {
+			err = commitErr
+			return
+		}
+
+		// VACUUM в Postgres должен быть вне транзакции — тут уже ок
+		if dbErr := db.Exec(`VACUUM`).Error; dbErr != nil {
+			logger.Warningf("VACUUM failed: %v", dbErr)
 		}
 	}()
 
 	// Calculate and backfill all_time from up+down for inbounds and clients
 	err = tx.Exec(`
-		UPDATE inbounds
-		SET all_time = IFNULL(up, 0) + IFNULL(down, 0)
-		WHERE IFNULL(all_time, 0) = 0 AND (IFNULL(up, 0) + IFNULL(down, 0)) > 0
-	`).Error
+    UPDATE inbounds
+    SET all_time = COALESCE(up, 0) + COALESCE(down, 0)
+    WHERE COALESCE(all_time, 0) = 0
+      AND (COALESCE(up, 0) + COALESCE(down, 0)) > 0
+`).Error
 	if err != nil {
 		return
 	}
+
 	err = tx.Exec(`
-		UPDATE client_traffics
-		SET all_time = IFNULL(up, 0) + IFNULL(down, 0)
-		WHERE IFNULL(all_time, 0) = 0 AND (IFNULL(up, 0) + IFNULL(down, 0)) > 0
-	`).Error
+    UPDATE client_traffics
+    SET all_time = COALESCE(up, 0) + COALESCE(down, 0)
+    WHERE COALESCE(all_time, 0) = 0
+      AND (COALESCE(up, 0) + COALESCE(down, 0)) > 0
+`).Error
 
 	if err != nil {
 		return
@@ -2254,13 +2282,16 @@ func (s *InboundService) MigrationRequirements() {
 	}
 	for inbound_index := range inbounds {
 		settings := map[string]any{}
-		json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
+		json.Unmarshal(inbounds[inbound_index].Settings, &settings)
 		clients, ok := settings["clients"].([]any)
 		if ok {
 			// Fix Client configuration problems
 			var newClients []any
 			for client_index := range clients {
-				c := clients[client_index].(map[string]any)
+				c, ok := clients[client_index].(map[string]any)
+				if !ok {
+					continue
+				}
 
 				// Add email='' if it is not exists
 				if _, ok := c["email"]; !ok {
@@ -2297,7 +2328,7 @@ func (s *InboundService) MigrationRequirements() {
 				return
 			}
 
-			inbounds[inbound_index].Settings = string(modifiedSettings)
+			inbounds[inbound_index].SetSettingsString(string(modifiedSettings))
 		}
 
 		// Add client traffic row for all clients which has email
@@ -2330,8 +2361,9 @@ func (s *InboundService) MigrationRequirements() {
 	SELECT id, port, stream_settings
 	FROM inbounds
 	WHERE protocol IN ('vmess','vless','trojan')
-	  AND stream_settings::jsonb->>'security' = 'tls'
-	  AND stream_settings::jsonb->'tlsSettings'->'settings'->'domains' IS NOT NULL
+	  AND stream_settings->>'security' = 'tls'
+	  AND stream_settings->'tlsSettings'->'settings'->'domains' IS NOT NULL
+	  AND stream_settings->'tlsSettings'->'settings'->'domains' <> 'null'::jsonb
 `).Scan(&externalProxy).Error
 
 	if err != nil || len(externalProxy) == 0 {
@@ -2363,12 +2395,11 @@ func (s *InboundService) MigrationRequirements() {
 		tx.Model(model.Inbound{}).Where("id = ?", ep.Id).Update("stream_settings", newStream)
 	}
 
-	err = tx.Raw(`UPDATE inbounds
-	SET tag = REPLACE(tag, '0.0.0.0:', '')
-	WHERE INSTR(tag, '0.0.0.0:') > 0;`).Error
-	if err != nil {
-		return
-	}
+	err = tx.Exec(`
+    UPDATE inbounds
+    SET tag = REPLACE(tag, '0.0.0.0:', '')
+    WHERE tag LIKE '%0.0.0.0:%';
+`).Error
 }
 
 func (s *InboundService) MigrateDB() {
@@ -2427,6 +2458,7 @@ func (s *InboundService) FilterAndSortClientEmails(emails []string) ([]string, [
 
 	return validEmails, extraEmails, nil
 }
+
 func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (bool, error) {
 	oldInbound, err := s.GetInbound(inboundId)
 	if err != nil {
@@ -2435,7 +2467,7 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 	}
 
 	var settings map[string]any
-	if err := json.Unmarshal([]byte(oldInbound.Settings), &settings); err != nil {
+	if err := json.Unmarshal(oldInbound.Settings, &settings); err != nil {
 		return false, err
 	}
 
@@ -2456,7 +2488,18 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 		if cEmail, ok := c["email"].(string); ok && cEmail == email {
 			// matched client, drop it
 			found = true
-			needApiDel, _ = c["enable"].(bool)
+			needApiDel = true
+
+			if v, ok := c["enable"]; ok {
+				switch t := v.(type) {
+				case bool:
+					needApiDel = t
+				case string:
+					needApiDel = strings.EqualFold(t, "true")
+				case float64: // json numbers -> float64
+					needApiDel = t != 0
+				}
+			}
 		} else {
 			newClients = append(newClients, client)
 		}
@@ -2475,7 +2518,7 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 		return false, err
 	}
 
-	oldInbound.Settings = string(newSettings)
+	oldInbound.SetSettingsString(string(newSettings))
 
 	db := database.GetDB()
 
@@ -2487,35 +2530,40 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 
 	needRestart := false
 
-	// remove stats too
-	if len(email) > 0 {
-		traffic, err := s.GetClientTrafficByEmail(email)
-		if err != nil {
-			return false, err
-		}
-		if traffic != nil {
-			if err := s.DelClientStat(db, email); err != nil {
-				logger.Error("Delete stats Data Error")
-				return false, err
-			}
+	// 1) DB часть — атомарно
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(oldInbound).Error; err != nil {
+			return err
 		}
 
-		if needApiDel {
-			s.xrayApi.Init(p.GetAPIPort())
-			if err1 := s.xrayApi.RemoveUser(oldInbound.Tag, email); err1 == nil {
-				logger.Debug("Client deleted by api:", email)
-				needRestart = false
-			} else {
-				if strings.Contains(err1.Error(), fmt.Sprintf("User %s not found.", email)) {
-					logger.Debug("User is already deleted. Nothing to do more...")
-				} else {
-					logger.Debug("Error in deleting client by api:", err1)
-					needRestart = true
-				}
+		if email != "" {
+			if err := s.DelClientIPs(tx, email); err != nil {
+				return err
 			}
-			s.xrayApi.Close()
+			if err := s.DelClientStat(tx, email); err != nil {
+				return err
+			}
 		}
+		return nil
+	}); err != nil {
+		return false, err
 	}
 
-	return needRestart, db.Save(oldInbound).Error
+	// 2) API часть — после коммита
+	if email != "" && needApiDel {
+		s.xrayApi.Init(p.GetAPIPort())
+		if err1 := s.xrayApi.RemoveUser(oldInbound.Tag, email); err1 == nil {
+			logger.Debug("Client deleted by api:", email)
+		} else {
+			if strings.Contains(err1.Error(), fmt.Sprintf("User %s not found.", email)) {
+				logger.Debug("User is already deleted. Nothing to do more...")
+			} else {
+				logger.Debug("Error in deleting client by api:", err1)
+				needRestart = true
+			}
+		}
+		s.xrayApi.Close()
+	}
+
+	return needRestart, nil
 }

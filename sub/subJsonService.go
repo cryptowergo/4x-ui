@@ -92,11 +92,11 @@ func (s *SubJsonService) GetJson(subId string, host string) (string, string, err
 			continue
 		}
 		if len(inbound.Listen) > 0 && inbound.Listen[0] == '@' {
-			listen, port, streamSettings, err := s.SubService.getFallbackMaster(inbound.Listen, inbound.StreamSettings)
+			listen, port, streamSettings, err := s.SubService.getFallbackMaster(inbound.Listen, inbound.StreamSettingsString())
 			if err == nil {
 				inbound.Listen = listen
 				inbound.Port = port
-				inbound.StreamSettings = streamSettings
+				inbound.SetStreamSettingsString(streamSettings)
 			}
 		}
 
@@ -150,7 +150,7 @@ func (s *SubJsonService) GetJson(subId string, host string) (string, string, err
 
 func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, host string) []json_util.RawMessage {
 	var newJsonArray []json_util.RawMessage
-	stream := s.streamData(inbound.StreamSettings)
+	stream := s.streamData(inbound.StreamSettingsString())
 
 	externalProxies, ok := stream["externalProxy"].([]any)
 	if !ok || len(externalProxies) == 0 {

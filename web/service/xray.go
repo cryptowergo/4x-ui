@@ -160,7 +160,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 				return nil, err
 			}
 
-			inbound.Settings = string(modifiedSettings)
+			inbound.SetSettingsString(string(modifiedSettings))
 		}
 
 		if len(inbound.StreamSettings) > 0 {
@@ -185,7 +185,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			if err != nil {
 				return nil, err
 			}
-			inbound.StreamSettings = string(newStream)
+			inbound.SetStreamSettingsString(string(newStream))
 		}
 
 		inboundConfig := inbound.GenXrayInboundConfig()

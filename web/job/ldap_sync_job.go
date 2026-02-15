@@ -141,7 +141,7 @@ func (j *LdapSyncJob) Run() {
 			continue
 		}
 		payload := &model.Inbound{Id: inboundMap[tag].Id}
-		payload.Settings = j.clientsToJSON(newClients)
+		payload.SetSettingsString(j.clientsToJSON(newClients))
 		if _, err := j.inboundService.AddInboundClient(payload); err != nil {
 			logger.Warningf("Failed to add clients for tag %s: %v", tag, err)
 		} else {
@@ -222,9 +222,10 @@ func (j *LdapSyncJob) batchSetEnable(ib *model.Inbound, emails []string, enable 
 	}
 
 	payload := &model.Inbound{
-		Id:       ib.Id,
-		Settings: j.clientsToJSON(clients),
+		Id: ib.Id,
 	}
+
+	payload.SetSettingsString(j.clientsToJSON(clients))
 
 	// Use a single AddInboundClient call to update enable
 	if _, err := j.inboundService.AddInboundClient(payload); err != nil {

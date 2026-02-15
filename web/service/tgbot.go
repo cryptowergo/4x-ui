@@ -2168,9 +2168,10 @@ func (t *Tgbot) SubmitAddClient() (bool, error) {
 	}
 
 	newInbound := &model.Inbound{
-		Id:       receiver_inbound_ID,
-		Settings: jsonString,
+		Id: receiver_inbound_ID,
 	}
+
+	newInbound.SetSettingsString(jsonString)
 
 	return t.inboundService.AddInboundClient(newInbound)
 }

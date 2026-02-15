@@ -103,7 +103,7 @@ func (j *CheckClientIpJob) hasLimitIp() bool {
 	}
 
 	for _, inbound := range inbounds {
-		if inbound.Settings == "" {
+		if len(inbound.Settings) == 0 {
 			continue
 		}
 
@@ -273,7 +273,7 @@ func (j *CheckClientIpJob) updateInboundClientIps(inboundClientIps *model.Inboun
 		return false
 	}
 
-	if inbound.Settings == "" {
+	if len(inbound.Settings) == 0 {
 		logger.Debug("wrong data:", inbound)
 		return false
 	}
