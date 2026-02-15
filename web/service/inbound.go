@@ -1228,10 +1228,13 @@ func (s *InboundService) disableInvalidInbounds(tx *gorm.DB) (bool, int64, error
 
 	if p != nil {
 		var tags []string
+		where := "((total > 0 AND COALESCE(up,0) + COALESCE(down,0) >= total) OR (expiry_time > 0 AND expiry_time <= ?)) AND enable = ?"
+
 		err := tx.Table("inbounds").
-			Select("inbounds.tag").
-			Where("(COALESCE(up,0) + COALESCE(down,0) >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+			Select("tag").
+			Where(where, now, true).
 			Scan(&tags).Error
+
 		if err != nil {
 			return false, 0, err
 		}
