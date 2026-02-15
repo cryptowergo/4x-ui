@@ -116,11 +116,10 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 	db := database.GetDB()
 	var inbounds []*model.Inbound
 
-	// Для PostgreSQL используем jsonb_array_elements для работы с JSON массивами
 	err := db.Model(model.Inbound{}).Preload("ClientStats").Where(`id in (
 		SELECT DISTINCT inbounds.id
 		FROM inbounds,
-			jsonb_array_elements(inbounds.settings->'clients') AS client 
+			jsonb_array_elements(inbounds.settings::jsonb->'clients') AS client 
 		WHERE
 			protocol in ('vmess','vless','trojan','shadowsocks')
 			AND client->>'subId' = ? AND enable = ?
@@ -147,8 +146,8 @@ func (s *SubService) getFallbackMaster(dest string, streamSettings string) (stri
 
 	// Для PostgreSQL используем jsonb_typeof и jsonb_array_elements
 	err := db.Model(model.Inbound{}).
-		Where("jsonb_typeof(settings->'fallbacks') = 'array'").
-		Where("EXISTS (SELECT 1 FROM jsonb_array_elements(settings->'fallbacks') AS fb WHERE fb->>'dest' = ?)", dest).
+		Where("jsonb_typeof(settings::jsonb->'fallbacks') = 'array'").
+		Where("EXISTS (SELECT 1 FROM jsonb_array_elements(settings::jsonb->'fallbacks') AS fb WHERE fb->>'dest' = ?)", dest).
 		Find(&inbound).Error
 
 	if err != nil {
