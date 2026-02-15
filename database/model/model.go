@@ -6,6 +6,8 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v2/util/json_util"
 	"github.com/mhsanaei/3x-ui/v2/xray"
+
+	"gorm.io/datatypes"
 )
 
 // Protocol represents the protocol type for Xray inbounds.
@@ -46,13 +48,13 @@ type Inbound struct {
 	ClientStats          []xray.ClientTraffic `gorm:"foreignKey:InboundId;references:Id" json:"clientStats" form:"clientStats"`                        // Client traffic statistics
 
 	// Xray configuration fields
-	Listen         string   `json:"listen" form:"listen"`
-	Port           int      `json:"port" form:"port"`
-	Protocol       Protocol `json:"protocol" form:"protocol"`
-	Settings       string   `json:"settings" form:"settings"`
-	StreamSettings string   `json:"streamSettings" form:"streamSettings"`
-	Tag            string   `json:"tag" form:"tag" gorm:"unique"`
-	Sniffing       string   `json:"sniffing" form:"sniffing"`
+	Listen         string         `json:"listen" form:"listen"`
+	Port           int            `json:"port" form:"port"`
+	Protocol       Protocol       `json:"protocol" form:"protocol"`
+	Settings       datatypes.JSON `json:"settings" form:"settings" gorm:"type:jsonb;default:'{}'"`
+	StreamSettings datatypes.JSON `json:"streamSettings" form:"streamSettings" gorm:"type:jsonb;default:'{}'"`
+	Sniffing       datatypes.JSON `json:"sniffing" form:"sniffing" gorm:"type:jsonb;default:'{}'"`
+	Tag            string         `json:"tag" form:"tag" gorm:"unique"`
 }
 
 // OutboundTraffics tracks traffic statistics for Xray outbound connections.

@@ -37,12 +37,14 @@ func initModels() error {
 		&xray.ClientTraffic{},
 		&model.HistoryOfSeeders{},
 	}
-	for _, dbModel := range models {
-		if err := db.AutoMigrate(dbModel); err != nil {
-			log.Printf("Error auto migrating model: %v", err)
+	for _, m := range models {
+		log.Printf("AutoMigrate: %T", m)
+		if err := db.Debug().AutoMigrate(m); err != nil {
+			log.Printf("FAILED on %T: %v", m, err)
 			return err
 		}
 	}
+
 	return nil
 }
 

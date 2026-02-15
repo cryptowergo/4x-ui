@@ -27,7 +27,7 @@ func InitDBWithConfig(dbConfig *config.DatabaseConfig) error {
 	if config.IsDebug() {
 		gormLogger = logger.Default
 	} else {
-		gormLogger = logger.Discard
+		gormLogger = logger.Default.LogMode(logger.Error)
 	}
 
 	c := &gorm.Config{
