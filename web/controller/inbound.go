@@ -103,32 +103,87 @@ func (a *InboundController) getClientTrafficsById(c *gin.Context) {
 	jsonObj(c, clientTraffics, nil)
 }
 
+type InboundCreateDTO struct {
+	Up                   int64          `form:"up" json:"up"`
+	Down                 int64          `form:"down" json:"down"`
+	Total                int64          `form:"total" json:"total"`
+	Remark               string         `form:"remark" json:"remark"`
+	Enable               bool           `form:"enable" json:"enable"`
+	ExpiryTime           int64          `form:"expiryTime" json:"expiryTime"`
+	TrafficReset         string         `form:"trafficReset" json:"trafficReset"`
+	LastTrafficResetTime int64          `form:"lastTrafficResetTime" json:"lastTrafficResetTime"`
+	Listen               string         `form:"listen" json:"listen"`
+	Port                 int            `form:"port" json:"port"`
+	Protocol             model.Protocol `form:"protocol" json:"protocol"`
+
+	Settings       string `form:"settings" json:"settings"`
+	StreamSettings string `form:"streamSettings" json:"streamSettings"`
+	Sniffing       string `form:"sniffing" json:"sniffing"`
+}
+
 // addInbound creates a new inbound configuration.
 func (a *InboundController) addInbound(c *gin.Context) {
-	inbound := &model.Inbound{}
-	err := c.ShouldBind(inbound)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), err)
+	var dto InboundCreateDTO
+
+	// у тебя сейчас form-data, значит так:
+	if err := c.ShouldBind(&dto); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не success
 		return
 	}
+
+	// валидируем JSON-поля (иначе можно записать мусор в jsonb)
+	if dto.Settings != "" && !json.Valid([]byte(dto.Settings)) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
+		return
+	}
+	if dto.StreamSettings != "" && !json.Valid([]byte(dto.StreamSettings)) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid streamSettings JSON"))
+		return
+	}
+	if dto.Sniffing != "" && !json.Valid([]byte(dto.Sniffing)) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid sniffing JSON"))
+		return
+	}
+
 	user := session.GetLoginUser(c)
-	inbound.UserId = user.Id
+
+	inbound := &model.Inbound{
+		UserId:               user.Id,
+		Up:                   dto.Up,
+		Down:                 dto.Down,
+		Total:                dto.Total,
+		Remark:               dto.Remark,
+		Enable:               dto.Enable,
+		ExpiryTime:           dto.ExpiryTime,
+		TrafficReset:         dto.TrafficReset,
+		LastTrafficResetTime: dto.LastTrafficResetTime,
+		Listen:               dto.Listen,
+		Port:                 dto.Port,
+		Protocol:             dto.Protocol,
+	}
+
+	inbound.SetSettingsString(dto.Settings)
+	inbound.SetStreamSettingsString(dto.StreamSettings)
+	inbound.SetSniffingString(dto.Sniffing)
+
+	// tag
 	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
 		inbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
 	} else {
 		inbound.Tag = fmt.Sprintf("inbound-%v:%v", inbound.Listen, inbound.Port)
 	}
 
-	inbound, needRestart, err := a.inboundService.AddInbound(inbound)
+	created, needRestart, err := a.inboundService.AddInbound(inbound)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), inbound, nil)
+
+	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), created, nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
-	// Broadcast inbounds update via WebSocket
+
 	inbounds, _ := a.inboundService.GetInbounds(user.Id)
 	websocket.BroadcastInbounds(inbounds)
 }
@@ -304,14 +359,30 @@ func (a *InboundController) clearClientIps(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.logCleanSuccess"), nil)
 }
 
+type AddClientDTO struct {
+	Id       int    `form:"id" json:"id"`
+	Settings string `form:"settings" json:"settings"`
+}
+
 // addInboundClient adds a new client to an existing inbound.
 func (a *InboundController) addInboundClient(c *gin.Context) {
-	data := &model.Inbound{}
-	err := c.ShouldBind(data)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+	var dto AddClientDTO
+	if err := c.ShouldBind(&dto); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не inboundUpdateSuccess
 		return
 	}
+
+	if dto.Id <= 0 {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid id"))
+		return
+	}
+	if dto.Settings == "" || !json.Valid([]byte(dto.Settings)) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
+		return
+	}
+
+	data := &model.Inbound{Id: dto.Id}
+	data.SetSettingsString(dto.Settings)
 
 	needRestart, err := a.inboundService.AddInboundClient(data)
 	if err != nil {
@@ -319,6 +390,7 @@ func (a *InboundController) addInboundClient(c *gin.Context) {
 		return
 	}
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), nil)
+
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
@@ -344,22 +416,39 @@ func (a *InboundController) delInboundClient(c *gin.Context) {
 	}
 }
 
+type UpdateClientDTO struct {
+	Id       int    `form:"id" json:"id"`
+	Settings string `form:"settings" json:"settings"`
+}
+
 // updateInboundClient updates a client's configuration in an inbound.
 func (a *InboundController) updateInboundClient(c *gin.Context) {
 	clientId := c.Param("clientId")
 
-	inbound := &model.Inbound{}
-	err := c.ShouldBind(inbound)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+	var dto UpdateClientDTO
+	if err := c.ShouldBind(&dto); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не success
 		return
 	}
+
+	if dto.Id <= 0 {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid id"))
+		return
+	}
+	if dto.Settings == "" || !json.Valid([]byte(dto.Settings)) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
+		return
+	}
+
+	inbound := &model.Inbound{Id: dto.Id}
+	inbound.SetSettingsString(dto.Settings)
 
 	needRestart, err := a.inboundService.UpdateInboundClient(inbound, clientId)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
+
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientUpdateSuccess"), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
