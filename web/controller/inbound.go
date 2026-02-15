@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
@@ -55,32 +54,6 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/:id/delClientByEmail/:email", a.delInboundClientByEmail)
 }
 
-// getInbounds retrieves the list of inbounds for the logged-in user.
-func (a *InboundController) getInbounds(c *gin.Context) {
-	user := session.GetLoginUser(c)
-	inbounds, err := a.inboundService.GetInbounds(user.Id)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
-		return
-	}
-	jsonObj(c, inbounds, nil)
-}
-
-// getInbound retrieves a specific inbound by its ID.
-func (a *InboundController) getInbound(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "get"), err)
-		return
-	}
-	inbound, err := a.inboundService.GetInbound(id)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
-		return
-	}
-	jsonObj(c, inbound, nil)
-}
-
 // getClientTraffics retrieves client traffic information by email.
 func (a *InboundController) getClientTraffics(c *gin.Context) {
 	email := c.Param("email")
@@ -103,91 +76,6 @@ func (a *InboundController) getClientTrafficsById(c *gin.Context) {
 	jsonObj(c, clientTraffics, nil)
 }
 
-type InboundCreateDTO struct {
-	Up                   int64          `form:"up" json:"up"`
-	Down                 int64          `form:"down" json:"down"`
-	Total                int64          `form:"total" json:"total"`
-	Remark               string         `form:"remark" json:"remark"`
-	Enable               bool           `form:"enable" json:"enable"`
-	ExpiryTime           int64          `form:"expiryTime" json:"expiryTime"`
-	TrafficReset         string         `form:"trafficReset" json:"trafficReset"`
-	LastTrafficResetTime int64          `form:"lastTrafficResetTime" json:"lastTrafficResetTime"`
-	Listen               string         `form:"listen" json:"listen"`
-	Port                 int            `form:"port" json:"port"`
-	Protocol             model.Protocol `form:"protocol" json:"protocol"`
-
-	Settings       string `form:"settings" json:"settings"`
-	StreamSettings string `form:"streamSettings" json:"streamSettings"`
-	Sniffing       string `form:"sniffing" json:"sniffing"`
-}
-
-// addInbound creates a new inbound configuration.
-func (a *InboundController) addInbound(c *gin.Context) {
-	var dto InboundCreateDTO
-
-	// у тебя сейчас form-data, значит так:
-	if err := c.ShouldBind(&dto); err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не success
-		return
-	}
-
-	// валидируем JSON-поля (иначе можно записать мусор в jsonb)
-	if dto.Settings != "" && !json.Valid([]byte(dto.Settings)) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
-		return
-	}
-	if dto.StreamSettings != "" && !json.Valid([]byte(dto.StreamSettings)) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid streamSettings JSON"))
-		return
-	}
-	if dto.Sniffing != "" && !json.Valid([]byte(dto.Sniffing)) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid sniffing JSON"))
-		return
-	}
-
-	user := session.GetLoginUser(c)
-
-	inbound := &model.Inbound{
-		UserId:               user.Id,
-		Up:                   dto.Up,
-		Down:                 dto.Down,
-		Total:                dto.Total,
-		Remark:               dto.Remark,
-		Enable:               dto.Enable,
-		ExpiryTime:           dto.ExpiryTime,
-		TrafficReset:         dto.TrafficReset,
-		LastTrafficResetTime: dto.LastTrafficResetTime,
-		Listen:               dto.Listen,
-		Port:                 dto.Port,
-		Protocol:             dto.Protocol,
-	}
-
-	inbound.SetSettingsString(dto.Settings)
-	inbound.SetStreamSettingsString(dto.StreamSettings)
-	inbound.SetSniffingString(dto.Sniffing)
-
-	// tag
-	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
-		inbound.Tag = fmt.Sprintf("inbound-%v", inbound.Port)
-	} else {
-		inbound.Tag = fmt.Sprintf("inbound-%v:%v", inbound.Listen, inbound.Port)
-	}
-
-	created, needRestart, err := a.inboundService.AddInbound(inbound)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), created, nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-
-	inbounds, _ := a.inboundService.GetInbounds(user.Id)
-	websocket.BroadcastInbounds(inbounds)
-}
-
 // delInbound deletes an inbound configuration by its ID.
 func (a *InboundController) delInbound(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
@@ -208,99 +96,6 @@ func (a *InboundController) delInbound(c *gin.Context) {
 	user := session.GetLoginUser(c)
 	inbounds, _ := a.inboundService.GetInbounds(user.Id)
 	websocket.BroadcastInbounds(inbounds)
-}
-
-type InboundUpdateDTO struct {
-	Up                   int64          `json:"up" form:"up"`
-	Down                 int64          `json:"down" form:"down"`
-	Total                int64          `json:"total" form:"total"`
-	Remark               string         `json:"remark" form:"remark"`
-	Enable               bool           `json:"enable" form:"enable"`
-	ExpiryTime           int64          `json:"expiryTime" form:"expiryTime"`
-	TrafficReset         string         `json:"trafficReset" form:"trafficReset"`
-	LastTrafficResetTime int64          `json:"lastTrafficResetTime" form:"lastTrafficResetTime"`
-	Listen               string         `json:"listen" form:"listen"`
-	Port                 int            `json:"port" form:"port"`
-	Protocol             model.Protocol `json:"protocol" form:"protocol"`
-
-	// ВАЖНО: в DTO это строки, потому что form-data присылает текст
-	Settings       string `json:"settings" form:"settings"`
-	StreamSettings string `json:"streamSettings" form:"streamSettings"`
-	Sniffing       string `json:"sniffing" form:"sniffing"`
-}
-
-func bindInboundUpdate(c *gin.Context, id int) (*model.Inbound, error) {
-	var dto InboundUpdateDTO
-
-	ct := c.GetHeader("Content-Type")
-	if strings.HasPrefix(ct, "application/json") {
-		if err := c.ShouldBindJSON(&dto); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := c.ShouldBind(&dto); err != nil {
-			return nil, err
-		}
-	}
-
-	// Валидация JSON строк (чтобы не записать мусор в jsonb)
-	if dto.Settings != "" && !json.Valid([]byte(dto.Settings)) {
-		return nil, fmt.Errorf("invalid settings JSON")
-	}
-	if dto.StreamSettings != "" && !json.Valid([]byte(dto.StreamSettings)) {
-		return nil, fmt.Errorf("invalid streamSettings JSON")
-	}
-	if dto.Sniffing != "" && !json.Valid([]byte(dto.Sniffing)) {
-		return nil, fmt.Errorf("invalid sniffing JSON")
-	}
-
-	inb := &model.Inbound{
-		Id:                   id,
-		Up:                   dto.Up,
-		Down:                 dto.Down,
-		Total:                dto.Total,
-		Remark:               dto.Remark,
-		Enable:               dto.Enable,
-		ExpiryTime:           dto.ExpiryTime,
-		TrafficReset:         dto.TrafficReset,
-		LastTrafficResetTime: dto.LastTrafficResetTime,
-		Listen:               dto.Listen,
-		Port:                 dto.Port,
-		Protocol:             dto.Protocol,
-	}
-
-	inb.SetSettingsString(dto.Settings)
-	inb.SetStreamSettingsString(dto.StreamSettings)
-	inb.SetSniffingString(dto.Sniffing)
-
-	return inb, nil
-}
-
-// updateInbound updates an existing inbound configuration.
-func (a *InboundController) updateInbound(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-
-	inbound, err := bindInboundUpdate(c, id)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-
-	updated, needRestart, err := a.inboundService.UpdateInbound(inbound)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), updated, nil)
-
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
 }
 
 // getClientIps retrieves the IP addresses associated with a client by email.
@@ -359,43 +154,6 @@ func (a *InboundController) clearClientIps(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.logCleanSuccess"), nil)
 }
 
-type AddClientDTO struct {
-	Id       int    `form:"id" json:"id"`
-	Settings string `form:"settings" json:"settings"`
-}
-
-// addInboundClient adds a new client to an existing inbound.
-func (a *InboundController) addInboundClient(c *gin.Context) {
-	var dto AddClientDTO
-	if err := c.ShouldBind(&dto); err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не inboundUpdateSuccess
-		return
-	}
-
-	if dto.Id <= 0 {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid id"))
-		return
-	}
-	if dto.Settings == "" || !json.Valid([]byte(dto.Settings)) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
-		return
-	}
-
-	data := &model.Inbound{Id: dto.Id}
-	data.SetSettingsString(dto.Settings)
-
-	needRestart, err := a.inboundService.AddInboundClient(data)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), nil)
-
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-}
-
 // delInboundClient deletes a client from an inbound by inbound ID and client ID.
 func (a *InboundController) delInboundClient(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
@@ -411,45 +169,6 @@ func (a *InboundController) delInboundClient(c *gin.Context) {
 		return
 	}
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-}
-
-type UpdateClientDTO struct {
-	Id       int    `form:"id" json:"id"`
-	Settings string `form:"settings" json:"settings"`
-}
-
-// updateInboundClient updates a client's configuration in an inbound.
-func (a *InboundController) updateInboundClient(c *gin.Context) {
-	clientId := c.Param("clientId")
-
-	var dto UpdateClientDTO
-	if err := c.ShouldBind(&dto); err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err) // не success
-		return
-	}
-
-	if dto.Id <= 0 {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid id"))
-		return
-	}
-	if dto.Settings == "" || !json.Valid([]byte(dto.Settings)) {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("invalid settings JSON"))
-		return
-	}
-
-	inbound := &model.Inbound{Id: dto.Id}
-	inbound.SetSettingsString(dto.Settings)
-
-	needRestart, err := a.inboundService.UpdateInboundClient(inbound, clientId)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientUpdateSuccess"), nil)
 	if needRestart {
 		a.xrayService.SetToNeedRestart()
 	}
