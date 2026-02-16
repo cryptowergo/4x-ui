@@ -166,7 +166,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		if len(inbound.StreamSettings) > 0 {
 			// Unmarshal stream JSON
 			var stream map[string]any
-			json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+			json.Unmarshal(inbound.StreamSettings, &stream)
 
 			// Remove the "settings" field under "tlsSettings" and "realitySettings"
 			tlsSettings, ok1 := stream["tlsSettings"].(map[string]any)
