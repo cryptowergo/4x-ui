@@ -60,14 +60,17 @@ func (a *InboundController) addInbound(c *gin.Context) {
 		Up:                   dto.Up,
 		Down:                 dto.Down,
 		Total:                dto.Total,
+		AllTime:              0,
 		Remark:               dto.Remark,
 		Enable:               dto.Enable,
 		ExpiryTime:           dto.ExpiryTime,
 		TrafficReset:         dto.TrafficReset,
 		LastTrafficResetTime: dto.LastTrafficResetTime,
+		ClientStats:          nil,
 		Listen:               dto.Listen,
 		Port:                 dto.Port,
 		Protocol:             dto.Protocol,
+		Tag:                  "",
 	}
 
 	inbound.SetSettingsString(dto.Settings)

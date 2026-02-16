@@ -3,6 +3,7 @@ package job
 import (
 	"encoding/json"
 
+	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 	"github.com/mhsanaei/3x-ui/v2/web/websocket"
@@ -10,6 +11,62 @@ import (
 
 	"github.com/valyala/fasthttp"
 )
+
+type InboundDTO struct {
+	Id                   int                  `json:"id"`
+	Up                   int64                `json:"up"`
+	Down                 int64                `json:"down"`
+	Total                int64                `json:"total"`
+	AllTime              int64                `json:"allTime"`
+	Remark               string               `json:"remark"`
+	Enable               bool                 `json:"enable"`
+	ExpiryTime           int64                `json:"expiryTime"`
+	TrafficReset         string               `json:"trafficReset"`
+	LastTrafficResetTime int64                `json:"lastTrafficResetTime"`
+	ClientStats          []xray.ClientTraffic `json:"clientStats"`
+
+	Listen   string `json:"listen"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	Tag      string `json:"tag"`
+
+	// важно: как строки (как в твоём /panel/api/inbounds/list)
+	Settings       string `json:"settings"`
+	StreamSettings string `json:"streamSettings"`
+	Sniffing       string `json:"sniffing"`
+}
+
+func toInboundDTO(m model.Inbound) InboundDTO {
+	return InboundDTO{
+		Id:                   m.Id,
+		Up:                   m.Up,
+		Down:                 m.Down,
+		Total:                m.Total,
+		AllTime:              m.AllTime,
+		Remark:               m.Remark,
+		Enable:               m.Enable,
+		ExpiryTime:           m.ExpiryTime,
+		TrafficReset:         m.TrafficReset,
+		LastTrafficResetTime: m.LastTrafficResetTime,
+		ClientStats:          m.ClientStats,
+
+		Listen:   m.Listen,
+		Port:     m.Port,
+		Protocol: string(m.Protocol),
+		Tag:      m.Tag,
+
+		Settings:       string(m.Settings),
+		StreamSettings: string(m.StreamSettings),
+		Sniffing:       string(m.Sniffing),
+	}
+}
+
+func toInboundDTOPtr(in *model.Inbound) InboundDTO {
+	if in == nil {
+		return InboundDTO{}
+	}
+	return toInboundDTO(*in)
+}
 
 // XrayTrafficJob collects and processes traffic statistics from Xray, updating the database and optionally informing external APIs.
 type XrayTrafficJob struct {
@@ -81,13 +138,17 @@ func (j *XrayTrafficJob) Run() {
 
 	// Broadcast full inbounds update for real-time UI refresh
 	if updatedInbounds != nil {
+		dtos := make([]InboundDTO, 0, len(updatedInbounds))
+		for _, in := range updatedInbounds {
+			dtos = append(dtos, toInboundDTOPtr(in))
+		}
+
 		websocket.BroadcastInbounds(updatedInbounds)
 	}
 
 	if updatedOutbounds != nil {
 		websocket.BroadcastOutbounds(updatedOutbounds)
 	}
-
 }
 
 func (j *XrayTrafficJob) informTrafficToExternalAPI(inboundTraffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic) {
