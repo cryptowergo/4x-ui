@@ -1,5 +1,5 @@
-[![Release](https://img.shields.io/github/v/release/mhsanaei/3x-ui.svg)](https://github.com/cryptowergo/4x-ui/releases)
-[![Build](https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg)](https://github.com/cryptowergo/4x-ui/actions)
+[![Release](https://img.shields.io/github/v/release/cryptowergo/4x-ui.svg)](https://github.com/cryptowergo/4x-ui/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/cryptowergo/4x-ui/release.yml.svg)](https://github.com/cryptowergo/4x-ui/actions)
 [![Downloads](https://img.shields.io/github/downloads/cryptowergo/4x-ui/total.svg)](https://github.com/MHSanaei/3x-ui/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
