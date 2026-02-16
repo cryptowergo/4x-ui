@@ -1,12 +1,10 @@
-name: Release 3X-UI
+name: Release 4X-UI
 
 on:
   workflow_dispatch:
   release:
     types: [published]
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
     paths:
@@ -20,7 +18,8 @@ on:
       - 'x-ui.service.debian'
       - 'x-ui.service.arch'
       - 'x-ui.service.rhel'
-
+    paths-ignore:
+      - '**/*.md'
 jobs:
   build:
     permissions:

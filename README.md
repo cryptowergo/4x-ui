@@ -17,12 +17,10 @@ As an enhanced fork of the original 3X-UI project, 4X-UI provides improved stabi
 bash <(curl -Ls https://raw.githubusercontent.com/cryptowergo/4x-ui/master/install.sh)
 ```
 
-For full documentation, please visit the [project Wiki](https://github.com/MHSanaei/3x-ui/wiki).
-
 ## A Special Thanks to
 
 - [alireza0](https://github.com/alireza0/)
-- [alireza0](https://github.com/MHSanaei/)
+- [MHSanaei](https://github.com/MHSanaei/)
 
 ## Stargazers over Time
 
