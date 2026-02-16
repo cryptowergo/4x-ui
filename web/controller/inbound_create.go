@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
+	"github.com/mhsanaei/3x-ui/v2/pkg/x/xs"
 	"github.com/mhsanaei/3x-ui/v2/web/session"
 	"github.com/mhsanaei/3x-ui/v2/web/websocket"
 )
@@ -96,5 +97,7 @@ func (a *InboundController) addInbound(c *gin.Context) {
 	}
 
 	inbounds, _ := a.inboundService.GetInbounds(user.Id)
-	websocket.BroadcastInbounds(inbounds)
+	websocket.BroadcastInbounds(xs.Map(inbounds, func(item *model.Inbound, index int) InboundDTO {
+		return toInboundDTOPtr(item)
+	}))
 }

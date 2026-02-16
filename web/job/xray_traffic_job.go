@@ -5,6 +5,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/pkg/x/xs"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
 	"github.com/mhsanaei/3x-ui/v2/web/websocket"
 	"github.com/mhsanaei/3x-ui/v2/xray"
@@ -138,12 +139,9 @@ func (j *XrayTrafficJob) Run() {
 
 	// Broadcast full inbounds update for real-time UI refresh
 	if updatedInbounds != nil {
-		dtos := make([]InboundDTO, 0, len(updatedInbounds))
-		for _, in := range updatedInbounds {
-			dtos = append(dtos, toInboundDTOPtr(in))
-		}
-
-		websocket.BroadcastInbounds(updatedInbounds)
+		websocket.BroadcastInbounds(xs.Map(updatedInbounds, func(item *model.Inbound, index int) InboundDTO {
+			return toInboundDTOPtr(item)
+		}))
 	}
 
 	if updatedOutbounds != nil {
