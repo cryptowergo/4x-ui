@@ -2,6 +2,11 @@ package job
 
 import (
 	"encoding/json"
+	"os"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc/status"
 
 	"github.com/mhsanaei/3x-ui/v2/database/model"
 	"github.com/mhsanaei/3x-ui/v2/logger"
@@ -75,28 +80,48 @@ type XrayTrafficJob struct {
 	xrayService     service.XrayService
 	inboundService  service.InboundService
 	outboundService service.OutboundService
+	mu              sync.Mutex
+	collection      trafficCollectionState
+	metricsPath     string
 }
 
 // NewXrayTrafficJob creates a new traffic collection job instance.
 func NewXrayTrafficJob() *XrayTrafficJob {
-	return new(XrayTrafficJob)
+	return &XrayTrafficJob{metricsPath: os.Getenv("XUI_TRAFFIC_METRICS_FILE")}
 }
 
 // Run collects traffic statistics from Xray and updates the database, triggering restart if needed.
 func (j *XrayTrafficJob) Run() {
+	// A slow collection must not overlap another reset-and-persist cycle.
+	if !j.mu.TryLock() {
+		return
+	}
+	defer j.mu.Unlock()
+	failure := "xray_down"
+	defer func() {
+		j.collection.record(time.Now(), failure)
+		if err := j.collection.write(j.metricsPath); err != nil {
+			logger.Warning("write Xray traffic collection metrics failed:", err)
+		}
+	}()
 	if !j.xrayService.IsXrayRunning() {
 		return
 	}
 	traffics, clientTraffics, err := j.xrayService.GetXrayTraffic()
 	if err != nil {
+		failure = "fetch"
+		logger.Warningf("Xray traffic collection failed (code=%s); online and traffic values are stale", status.Code(err))
 		return
 	}
+	failure = ""
 	err, needRestart0 := j.inboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
+		failure = "database"
 		logger.Warning("add inbound traffic failed:", err)
 	}
 	err, needRestart1 := j.outboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
+		failure = "database"
 		logger.Warning("add outbound traffic failed:", err)
 	}
 	if ExternalTrafficInformEnable, err := j.settingService.GetExternalTrafficInformEnable(); ExternalTrafficInformEnable {

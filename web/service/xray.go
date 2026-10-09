@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 
@@ -202,7 +203,9 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic, 
 		return nil, nil, err
 	}
 	apiPort := p.GetAPIPort()
-	s.xrayAPI.Init(apiPort)
+	if err := s.xrayAPI.Init(apiPort); err != nil {
+		return nil, nil, fmt.Errorf("initialize traffic API: %w", err)
+	}
 	defer s.xrayAPI.Close()
 
 	traffic, clientTraffic, err := s.xrayAPI.GetTraffic(true)

@@ -28,6 +28,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// statsReceiveLimit bounds allocation while allowing busy nodes to return retained user counters.
+const statsReceiveLimit = 32 << 20
+
 // XrayAPI is a gRPC client for managing Xray core configuration, inbounds, outbounds, and statistics.
 type XrayAPI struct {
 	HandlerServiceClient *command.HandlerServiceClient
@@ -220,7 +223,7 @@ func (x *XrayAPI) GetTraffic(reset bool) ([]*Traffic, []*ClientTraffic, error) {
 		return nil, nil, common.NewError("xray StatusServiceClient is not initialized")
 	}
 
-	resp, err := (*x.StatsServiceClient).QueryStats(ctx, &statsService.QueryStatsRequest{Reset_: reset})
+	resp, err := (*x.StatsServiceClient).QueryStats(ctx, &statsService.QueryStatsRequest{Reset_: reset}, grpc.MaxCallRecvMsgSize(statsReceiveLimit))
 	if err != nil {
 		logger.Debug("Failed to query Xray stats:", err)
 		return nil, nil, err
